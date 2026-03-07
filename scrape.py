@@ -31,15 +31,23 @@ MONTH_MAP = {
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
 
+DEBUG = False   # set via --debug flag
+
+
+def debug(msg):
+    if DEBUG:
+        print(f"    [DEBUG] {msg}")
+
+
 def parse_month_day(text):
     """
-    Parse a string like 'March 10', 'March 10th', 'March 10th, Wednesday'
+    Parse a string like 'March 10', 'March 10th', 'March 10h' (typo-tolerant)
     into a datetime.date, inferring the year from context.
     Returns None if parsing fails.
     """
     text = text.strip().lower()
-    # Strip ordinal suffixes
-    text = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', text)
+    # Strip ordinal suffixes (including common typos like '29h')
+    text = re.sub(r'(\d+)(st|nd|rd|th|h)\b', r'\1', text)
     # Try to match 'month day'
     m = re.search(r'([a-z]+)\s+(\d{1,2})', text)
     if not m:
@@ -64,8 +72,8 @@ def is_placeholder(text):
     """Return True if the text is an unfilled placeholder."""
     if not text:
         return True
-    t = text.strip().lower()
-    return t in {"", "title", "tbd", "text of abstract", "tba"}
+    t = text.strip().lower().rstrip(":")
+    return t in {"", "title", "tbd", "text of abstract", "tba", "abstract"}
 
 
 def upcoming_window():
@@ -102,18 +110,12 @@ def parse_algebra(soup, url):
       ***Abstract***: ...
     """
     talks = []
-    # The current semester is under an <h2> like 'Spring 2026'
     content_div = soup.find("div", class_="dokuwiki")
     if not content_div:
         return talks
 
-    in_current = False
     for li in content_div.find_all("li"):
         text = li.get_text(" ", strip=True)
-
-        # Detect semester heading proximity – skip past semesters
-        # (list items appear under the current <h2>; we stop at the next <hr>)
-        # Simple approach: look for bold-only first line as date
         lines = [l.strip() for l in li.get_text("\n").split("\n") if l.strip()]
         if not lines:
             continue
@@ -127,7 +129,6 @@ def parse_algebra(soup, url):
             continue
 
         speaker_aff = lines[1] if len(lines) > 1 else ""
-        # Affiliation is in parentheses
         aff_m = re.search(r'\(([^)]+)\)', speaker_aff)
         affiliation = aff_m.group(1) if aff_m else ""
         speaker = re.sub(r'\s*\([^)]*\)', '', speaker_aff).strip()
@@ -192,50 +193,155 @@ def parse_analysis(soup, url):
     return talks
 
 
+def _find_current_semester_section(soup):
+    """
+    Find the section of the page corresponding to the current semester.
+    Returns a list of <li> elements within that section.
+
+    DokuWiki seminar pages typically have an <h1> like 'Spring 2026'
+    followed by a <ul> with the talk list. Past semesters are behind
+    collapsible blocks or further down the page.
+    """
+    # Look for the current semester heading
+    today = datetime.date.today()
+    season = "Spring" if today.month <= 7 else "Fall"
+    semester_label = f"{season} {today.year}".lower()
+
+    # Strategy 1: find an h1/h2/h3 matching the semester, then get the
+    # <ul> that follows it.
+    for tag in soup.find_all(re.compile(r'^h[1-3]$')):
+        heading_text = tag.get_text(strip=True).lower()
+        if semester_label in heading_text:
+            debug(f"Found semester heading: '{tag.get_text(strip=True)}'")
+            # Collect all <li> from sibling <ul> elements until the next heading
+            items = []
+            for sib in tag.find_next_siblings():
+                if sib.name and re.match(r'^h[1-3]$', sib.name):
+                    break  # hit next section
+                if sib.name == 'ul':
+                    items.extend(sib.find_all('li', recursive=False))
+                # Also handle <div> wrappers around <ul>
+                elif sib.name == 'div':
+                    for ul in sib.find_all('ul'):
+                        items.extend(ul.find_all('li', recursive=False))
+            debug(f"Found {len(items)} list items under semester heading")
+            return items
+
+    debug(f"No semester heading found for '{semester_label}', falling back to all <li>")
+    # Fallback: return all <li> in the main content
+    content_div = soup.find("div", class_="dokuwiki")
+    if content_div:
+        return content_div.find_all("li")
+    return []
+
+
+def _extract_speaker_title(lines):
+    """
+    Given the text lines of a talk entry (after the date line),
+    extract speaker, affiliation, and title.
+
+    Handles both:
+      - Labeled format: "Speaker: Name (Aff)" / "Title: ..."
+      - Split format:   "Speaker:" on one line, name on the next
+        (happens when BeautifulSoup splits plain-text labels from
+         bold-wrapped values into separate lines)
+      - Special events: "PETER HILTON MEMORIAL LECTURE" etc.
+    """
+    speaker, affiliation, title = "", "", ""
+    is_special = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        ll = line.lower().strip()
+
+        # Skip blanks and abstract lines
+        if not ll or ll.startswith("abstract"):
+            i += 1
+            continue
+
+        # Detect special events
+        if "memorial lecture" in ll or "special time" in ll:
+            is_special = True
+            i += 1
+            continue
+
+        if ll.startswith("speaker"):
+            val = re.sub(r'(?i)^speaker\s*:\s*', '', line).strip()
+            # If the label was alone on its line, the name is on the next line
+            if not val and i + 1 < len(lines):
+                next_ll = lines[i + 1].strip().lower()
+                # Don't grab the next line if it's another label
+                if not (next_ll.startswith("title") or next_ll.startswith("abstract")):
+                    i += 1
+                    val = lines[i].strip()
+            aff_m = re.search(r'\(([^)]+)\)', val)
+            affiliation = aff_m.group(1) if aff_m else ""
+            speaker = re.sub(r'\s*\([^)]*\)', '', val).strip()
+        elif ll.startswith("title"):
+            val = re.sub(r'(?i)^title\s*:\s*', '', line).strip()
+            # Same: title text might be on the next line
+            if not val and i + 1 < len(lines):
+                next_ll = lines[i + 1].strip().lower()
+                if not (next_ll.startswith("speaker") or next_ll.startswith("abstract")):
+                    i += 1
+                    val = lines[i].strip()
+            if not is_placeholder(val):
+                title = val
+
+        i += 1
+
+    return speaker, affiliation, title, is_special
+
+
 def parse_geom_topology(soup, url):
     """
     Format: inline labels within list items.
       **Date**
       Speaker: **Name (Affiliation)**
       Title: **Title**
-      <WRAP box>Abstract</WRAP>
+      *Abstract:* ...
+
+    Also handles special events like the Peter Hilton Memorial Lecture.
     """
     talks = []
-    content_div = soup.find("div", class_="dokuwiki")
-    if not content_div:
-        return talks
+    items = _find_current_semester_section(soup)
 
-    for li in content_div.find_all("li"):
+    for li in items:
         raw = li.get_text("\n")
         lines = [l.strip() for l in raw.split("\n") if l.strip()]
         if not lines:
             continue
 
+        # Try to find a date in the first line
         date = parse_month_day(lines[0])
         if not date:
+            debug(f"No date in: {lines[0][:60]}")
             continue
 
-        speaker, affiliation, title = "", "", ""
-        for line in lines[1:]:
-            ll = line.lower()
-            if ll.startswith("speaker"):
-                val = re.sub(r'(?i)^speaker\s*:\s*', '', line).strip()
-                aff_m = re.search(r'\(([^)]+)\)', val)
-                affiliation = aff_m.group(1) if aff_m else ""
-                speaker = re.sub(r'\s*\([^)]*\)', '', val).strip()
-            elif ll.startswith("title"):
-                val = re.sub(r'(?i)^title\s*:\s*', '', line).strip()
-                if not is_placeholder(val):
-                    title = val
+        # Skip 'no seminar' / 'spring break' entries
+        full_text = " ".join(lines).lower()
+        if "no seminar" in full_text or "spring break" in full_text:
+            debug(f"Skipping no-seminar entry for {date}")
+            continue
+
+        speaker, affiliation, title, is_special = _extract_speaker_title(lines[1:])
 
         if speaker or title:
-            talks.append({
+            entry = {
                 "date": date,
                 "speaker": speaker,
                 "affiliation": affiliation,
                 "title": title,
                 "url": url,
-            })
+            }
+            if is_special:
+                entry["note"] = "Special event"
+            debug(f"Found: {date} | {speaker} | {title[:40]}")
+            talks.append(entry)
+        else:
+            debug(f"No speaker/title for {date}: {lines[1:3]}")
+
     return talks
 
 
@@ -284,23 +390,35 @@ def get_upcoming_talks():
             continue
 
         print(f"  Fetching {name} ...")
-        soup = fetch_page(url)
-        if soup is None:
-            continue
+        try:
+            soup = fetch_page(url)
+            if soup is None:
+                continue
 
-        talks = parser(soup, url)
-        for t in talks:
-            if start <= t["date"] <= end:
-                t["seminar"] = name
-                results.append(t)
+            talks = parser(soup, url)
+            for t in talks:
+                if start <= t["date"] <= end:
+                    t["seminar"] = name
+                    results.append(t)
+        except Exception as e:
+            print(f"  ERROR parsing {name}: {e}")
+            continue
 
     results.sort(key=lambda t: t["date"])
     return results
 
 
 if __name__ == "__main__":
+    import sys
+    if "--debug" in sys.argv:
+        DEBUG = True
+        print("Debug mode ON\n")
+
     talks = get_upcoming_talks()
     if not talks:
-        print("No upcoming talks found.")
+        print("\nNo upcoming talks found.")
+    else:
+        print(f"\n{len(talks)} upcoming talk(s):\n")
     for t in talks:
-        print(f"{t['date']}  [{t['seminar']}]  {t['speaker']}  —  {t['title'] or '(title TBD)'}")
+        note = f"  [{t.get('note', '')}]" if t.get('note') else ""
+        print(f"  {t['date']}  [{t['seminar']}]  {t['speaker']}  —  {t['title'] or '(title TBD)'}{note}")
