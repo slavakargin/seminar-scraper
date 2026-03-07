@@ -12,7 +12,8 @@ import datetime
 import xmlrpc.client
 
 from config import WIKI_XMLRPC_URL, WIKI_TARGET_PAGE
-
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # ---------------------------------------------------------------------------
 # Formatting

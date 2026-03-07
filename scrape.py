@@ -242,13 +242,13 @@ def _extract_speaker_title(lines):
 
     Handles both:
       - Labeled format: "Speaker: Name (Aff)" / "Title: ..."
-      - Split format:   "Speaker:" on one line, name on the next
-        (happens when BeautifulSoup splits plain-text labels from
-         bold-wrapped values into separate lines)
+      - Split format:   "Speaker:" on one line, name on the next,
+        possibly affiliation on a third line like "(University of X)"
       - Special events: "PETER HILTON MEMORIAL LECTURE" etc.
     """
     speaker, affiliation, title = "", "", ""
     is_special = False
+    special_info = ""
 
     i = 0
     while i < len(lines):
@@ -261,8 +261,24 @@ def _extract_speaker_title(lines):
             continue
 
         # Detect special events
-        if "memorial lecture" in ll or "special time" in ll:
+        if "memorial lecture" in ll:
             is_special = True
+            i += 1
+            continue
+
+        # Capture special time/location info
+        if "special time" in ll:
+            is_special = True
+            # Extract time and location after it
+            # Typical format: "SPECIAL TIME AND LOCATION: March 13, 3:30pm, Alumni Lounge..."
+            m = re.search(r'(\d{1,2}:\d{2}\s*(?:am|pm)?)\s*,?\s*(.*)', line, re.IGNORECASE)
+            if m:
+                time_str = m.group(1).strip()
+                loc_str = m.group(2).strip()
+                if loc_str:
+                    special_info = f"{time_str}, {loc_str}"
+                else:
+                    special_info = time_str
             i += 1
             continue
 
@@ -275,9 +291,19 @@ def _extract_speaker_title(lines):
                 if not (next_ll.startswith("title") or next_ll.startswith("abstract")):
                     i += 1
                     val = lines[i].strip()
+            # Check if affiliation is already in parentheses within val
             aff_m = re.search(r'\(([^)]+)\)', val)
-            affiliation = aff_m.group(1) if aff_m else ""
-            speaker = re.sub(r'\s*\([^)]*\)', '', val).strip()
+            if aff_m:
+                affiliation = aff_m.group(1)
+                speaker = re.sub(r'\s*\([^)]*\)', '', val).strip()
+            else:
+                speaker = val.strip()
+                # Affiliation might be on the next line as "(University of X)"
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    if next_line.startswith("(") and next_line.endswith(")"):
+                        i += 1
+                        affiliation = next_line[1:-1]
         elif ll.startswith("title"):
             val = re.sub(r'(?i)^title\s*:\s*', '', line).strip()
             # Same: title text might be on the next line
@@ -291,7 +317,14 @@ def _extract_speaker_title(lines):
 
         i += 1
 
-    return speaker, affiliation, title, is_special
+    # Build note from special info
+    note = ""
+    if is_special and special_info:
+        note = special_info
+    elif is_special:
+        note = "Special event"
+
+    return speaker, affiliation, title, note
 
 
 def parse_geom_topology(soup, url):
@@ -325,7 +358,7 @@ def parse_geom_topology(soup, url):
             debug(f"Skipping no-seminar entry for {date}")
             continue
 
-        speaker, affiliation, title, is_special = _extract_speaker_title(lines[1:])
+        speaker, affiliation, title, note = _extract_speaker_title(lines[1:])
 
         if speaker or title:
             entry = {
@@ -335,8 +368,8 @@ def parse_geom_topology(soup, url):
                 "title": title,
                 "url": url,
             }
-            if is_special:
-                entry["note"] = "Special event"
+            if note:
+                entry["note"] = note
             debug(f"Found: {date} | {speaker} | {title[:40]}")
             talks.append(entry)
         else:
