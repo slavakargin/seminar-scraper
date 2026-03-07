@@ -2,13 +2,15 @@ name: Weekly seminar update
 
 on:
   schedule:
-    # Every Sunday at 8:00 AM UTC (adjust to your timezone if needed)
+    # Every Sunday at 8:00 AM UTC (3:00 AM EST)
     - cron: '0 8 * * 0'
-  # Allow manual runs from the GitHub Actions UI
-  workflow_dispatch:
+  workflow_dispatch:  # allows manual trigger from GitHub UI
+
+permissions:
+  contents: write
 
 jobs:
-  update:
+  scrape-and-publish:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,13 +20,17 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Scrape and post
-        env:
-          WIKI_USER: ${{ secrets.WIKI_USER }}
-          WIKI_PASS: ${{ secrets.WIKI_PASS }}
-        run: python post_to_wiki.py
+      - name: Build HTML page
+        run: python build_html.py
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          commit_message: "Update seminar table"
