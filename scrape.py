@@ -233,14 +233,14 @@ def _find_current_semester_section(soup):
 
     # Strategy 1: find an h1/h2/h3 matching the semester, then get the
     # <ul> that follows it.
-    for tag in soup.find_all(re.compile(r'^h[1-3]$')):
+    for tag in soup.find_all(re.compile(r'^h[1-5]$')):
         heading_text = tag.get_text(strip=True).lower()
         if semester_label in heading_text:
             debug(f"Found semester heading: '{tag.get_text(strip=True)}'")
             # Collect all <li> from sibling <ul> elements until the next heading
             items = []
             for sib in tag.find_next_siblings():
-                if sib.name and re.match(r'^h[1-3]$', sib.name):
+                if sib.name and re.match(r'^h[1-5]$', sib.name):
                     break  # hit next section
                 if sib.name == 'ul':
                     items.extend(sib.find_all('li', recursive=False))
@@ -307,16 +307,20 @@ def _extract_speaker_title(lines):
             continue
 
         if ll.startswith("speaker"):
-            val = re.sub(r'(?i)^speaker\s*:\s*', '', line).strip()
+            val = re.sub(r'(?i)^speaker\s*:?\s*', '', line).strip()
             # If the label was alone on its line, the name is on the next line
             if not val and i + 1 < len(lines):
-                next_ll = lines[i + 1].strip().lower()
-                # Don't grab the next line if it's another label
-                if not (next_ll.startswith("title") or next_ll.startswith("abstract")
+                next_line = lines[i + 1].strip()
+                next_ll = next_line.lower()
+                # Handle ": Name (Aff)" pattern (colon split from label)
+                if next_line.startswith(":"):
+                    i += 1
+                    val = next_line.lstrip(": ").strip()
+                elif not (next_ll.startswith("title") or next_ll.startswith("abstract")
                         or next_ll.startswith("topic") or next_ll.startswith("time")
                         or next_ll.startswith("location")):
                     i += 1
-                    val = lines[i].strip()
+                    val = next_line
             # Check if affiliation is already in parentheses within val
             aff_m = re.search(r'\(([^)]+)\)', val)
             if aff_m:
@@ -331,14 +335,18 @@ def _extract_speaker_title(lines):
                         i += 1
                         affiliation = next_line[1:-1]
         elif ll.startswith("title") or ll.startswith("topic"):
-            val = re.sub(r'(?i)^(title|topic)\s*:\s*', '', line).strip()
+            val = re.sub(r'(?i)^(title|topic)\s*:?\s*', '', line).strip()
             # Same: title text might be on the next line
             if not val and i + 1 < len(lines):
-                next_ll = lines[i + 1].strip().lower()
-                if not (next_ll.startswith("speaker") or next_ll.startswith("abstract")
+                next_line = lines[i + 1].strip()
+                next_ll = next_line.lower()
+                if next_line.startswith(":"):
+                    i += 1
+                    val = next_line.lstrip(": ").strip()
+                elif not (next_ll.startswith("speaker") or next_ll.startswith("abstract")
                         or next_ll.startswith("time") or next_ll.startswith("location")):
                     i += 1
-                    val = lines[i].strip()
+                    val = next_line
             if not is_placeholder(val):
                 title = val
 
@@ -535,7 +543,7 @@ def parse_combinatorics(soup, url):
     semester_label = f"{season} {today.year}".lower()
 
     target_section = None
-    for tag in soup.find_all(re.compile(r'^h[1-3]$')):
+    for tag in soup.find_all(re.compile(r'^h[1-5]$')):
         if semester_label in tag.get_text(strip=True).lower():
             target_section = tag
             break
@@ -547,7 +555,7 @@ def parse_combinatorics(soup, url):
     # Get all text between this heading and the next one
     section_parts = []
     for sib in target_section.find_next_siblings():
-        if sib.name and re.match(r'^h[1-3]$', sib.name):
+        if sib.name and re.match(r'^h[1-5]$', sib.name):
             break
         section_parts.append(sib.get_text("\n"))
     section_text = "\n".join(section_parts)
@@ -596,16 +604,69 @@ def parse_combinatorics(soup, url):
     return talks
 
 
+def parse_arithmetic(soup, url):
+    """
+    Format (DokuWiki rendered):
+      **Date**
+      **//Speaker//**: Name (Affiliation)
+      **//Title//**: text
+      **//Abstract//**: ...
+
+    Same split-line pattern as Geometry/Topology and Statistics.
+    """
+    talks = []
+    items = _find_current_semester_section(soup)
+
+    for li in items:
+        raw = li.get_text("\n")
+        lines = [l.strip() for l in raw.split("\n") if l.strip()]
+        if not lines:
+            continue
+
+        date = parse_month_day(lines[0])
+        if not date:
+            debug(f"Arit: no date in: {lines[0][:60]}")
+            continue
+
+        # Skip organizational meetings
+        full_text = " ".join(lines).lower()
+        if "organizational meeting" in full_text:
+            debug(f"Arit: skipping org meeting for {date}")
+            continue
+
+        speaker, affiliation, title, note = _extract_speaker_title(lines[1:])
+
+        # Skip "NA" or "TBA" speakers
+        if speaker.upper() in ("NA", "TBA", ""):
+            if not title or is_placeholder(title):
+                continue
+
+        if speaker or title:
+            entry = {
+                "date": date,
+                "speaker": speaker,
+                "affiliation": affiliation,
+                "title": title,
+                "url": url,
+            }
+            if note:
+                entry["note"] = note
+            debug(f"Arit: {date} | {speaker} | {title[:40] if title else '(no title)'}")
+            talks.append(entry)
+
+    return talks
+
+
 # Map seminar name → parser function
 PARSERS = {
     "Algebra":           parse_algebra,
     "Analysis":          parse_analysis,
+    "Arithmetic":        parse_arithmetic,
+    "Combinatorics":     parse_combinatorics,
+    "Data Science":      parse_datasci,
     "Geometry/Topology": parse_geom_topology,
     "Statistics":        parse_statistics,
-    "Data Science":      parse_datasci,
-    "Combinatorics":     parse_combinatorics,
     # "Colloquium":      parse_colloquium,      # not active this semester
-    # "Arithmetic":      parse_arithmetic,       # format TBD
 }
 
 
