@@ -41,8 +41,8 @@ def debug(msg):
 
 def parse_month_day(text):
     """
-    Parse a string like 'March 10', 'March 10th', 'March 10h' (typo-tolerant)
-    into a datetime.date, inferring the year from context.
+    Parse a string like 'March 10', 'March 10th', 'March 10h' (typo-tolerant),
+    or 'February 10, 2026' into a datetime.date.
     Returns None if parsing fails.
     """
     text = text.strip().lower()
@@ -56,8 +56,32 @@ def parse_month_day(text):
     month = MONTH_MAP.get(month_name)
     if not month:
         return None
-    # If the month is before January of the current year we might be wrapping;
-    # simple heuristic: if month < current month by more than 6, use next year.
+    # Check if year is explicit (e.g. "February 10, 2026")
+    y = re.search(r'(\d{4})', text)
+    if y:
+        year = int(y.group(1))
+    else:
+        # Infer year: if month < current month by more than 6, use next year
+        today = datetime.date.today()
+        year = CURRENT_YEAR
+        if month < today.month - 6:
+            year += 1
+    try:
+        return datetime.date(year, month, day)
+    except ValueError:
+        return None
+
+
+def parse_short_date(text):
+    """
+    Parse 'Tuesday, 3/10' or 'Thursday, 9/4' or '3/10' into a datetime.date.
+    Also handles 'Tuesday, 1/20' with leading day-of-week.
+    Returns None if parsing fails.
+    """
+    m = re.search(r'(\d{1,2})/(\d{1,2})', text)
+    if not m:
+        return None
+    month, day = int(m.group(1)), int(m.group(2))
     today = datetime.date.today()
     year = CURRENT_YEAR
     if month < today.month - 6:
@@ -255,8 +279,8 @@ def _extract_speaker_title(lines):
         line = lines[i]
         ll = line.lower().strip()
 
-        # Skip blanks and abstract lines
-        if not ll or ll.startswith("abstract"):
+        # Skip blanks, abstract lines, and metadata labels
+        if not ll or ll.startswith("abstract") or ll.startswith("time") or ll.startswith("location"):
             i += 1
             continue
 
@@ -288,7 +312,9 @@ def _extract_speaker_title(lines):
             if not val and i + 1 < len(lines):
                 next_ll = lines[i + 1].strip().lower()
                 # Don't grab the next line if it's another label
-                if not (next_ll.startswith("title") or next_ll.startswith("abstract")):
+                if not (next_ll.startswith("title") or next_ll.startswith("abstract")
+                        or next_ll.startswith("topic") or next_ll.startswith("time")
+                        or next_ll.startswith("location")):
                     i += 1
                     val = lines[i].strip()
             # Check if affiliation is already in parentheses within val
@@ -304,12 +330,13 @@ def _extract_speaker_title(lines):
                     if next_line.startswith("(") and next_line.endswith(")"):
                         i += 1
                         affiliation = next_line[1:-1]
-        elif ll.startswith("title"):
-            val = re.sub(r'(?i)^title\s*:\s*', '', line).strip()
+        elif ll.startswith("title") or ll.startswith("topic"):
+            val = re.sub(r'(?i)^(title|topic)\s*:\s*', '', line).strip()
             # Same: title text might be on the next line
             if not val and i + 1 < len(lines):
                 next_ll = lines[i + 1].strip().lower()
-                if not (next_ll.startswith("speaker") or next_ll.startswith("abstract")):
+                if not (next_ll.startswith("speaker") or next_ll.startswith("abstract")
+                        or next_ll.startswith("time") or next_ll.startswith("location")):
                     i += 1
                     val = lines[i].strip()
             if not is_placeholder(val):
@@ -379,25 +406,206 @@ def parse_geom_topology(soup, url):
 
 
 # ---------------------------------------------------------------------------
-# TODO: add parsers for remaining seminars once formats are confirmed
+# Statistics and Data Science parsers
 # ---------------------------------------------------------------------------
-# parse_colloquium(soup, url)   – format TBD
-# parse_arithmetic(soup, url)   – format TBD
-# parse_combinatorics(soup, url) – format TBD
-# parse_datasci(soup, url)      – format TBD
-# parse_statistics(soup, url)   – format TBD
+
+def parse_statistics(soup, url):
+    """
+    Format (DokuWiki rendered):
+      **Date**
+      Speaker: **Name (Affiliation)**
+      Title: text
+      Abstract link
+
+    Same split-line pattern as Geometry/Topology.
+    """
+    talks = []
+    items = _find_current_semester_section(soup)
+
+    for li in items:
+        raw = li.get_text("\n")
+        lines = [l.strip() for l in raw.split("\n") if l.strip()]
+        if not lines:
+            continue
+
+        date = parse_month_day(lines[0])
+        if not date:
+            debug(f"Stat: no date in: {lines[0][:60]}")
+            continue
+
+        speaker, affiliation, title, note = _extract_speaker_title(lines[1:])
+
+        if speaker or title:
+            entry = {
+                "date": date,
+                "speaker": speaker,
+                "affiliation": affiliation,
+                "title": title,
+                "url": url,
+            }
+            if note:
+                entry["note"] = note
+            debug(f"Stat: {date} | {speaker} | {title[:40] if title else '(no title)'}")
+            talks.append(entry)
+
+    return talks
+
+
+def parse_datasci(soup, url):
+    """
+    Format (DokuWiki rendered):
+      **Date, Year**
+      //Speaker//: Dr. Name (Affiliation)
+      //Topic//: text
+
+    The italic labels cause text splitting issues with get_text("\n"),
+    so we use the full text and regex instead.
+    """
+    talks = []
+    content_div = soup.find("div", class_="dokuwiki")
+    if not content_div:
+        return talks
+
+    for li in content_div.find_all("li"):
+        text = li.get_text(" ", strip=True)
+
+        # Skip cancelled entries
+        if "cancelled" in text.lower():
+            continue
+
+        # Find date
+        date_m = re.search(r'((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4})', text, re.IGNORECASE)
+        if not date_m:
+            continue
+        date = parse_month_day(date_m.group(1))
+        if not date:
+            continue
+
+        # Extract speaker — between "Speaker :" and either "Topic" or end
+        speaker, affiliation, title = "", "", ""
+        sp_m = re.search(r'Speaker\s*:\s*(.+?)(?:\s*Topic\s*:|$)', text, re.IGNORECASE)
+        if sp_m:
+            speaker_raw = sp_m.group(1).strip()
+            # Strip "Dr." prefix and link artifacts
+            speaker_raw = re.sub(r'^Dr\.\s*', '', speaker_raw).strip()
+            aff_m = re.search(r'\(([^)]+)\)', speaker_raw)
+            if aff_m:
+                affiliation = aff_m.group(1)
+                speaker = re.sub(r'\s*\([^)]*\)', '', speaker_raw).strip()
+            else:
+                speaker = speaker_raw
+
+        # Extract topic/title
+        tp_m = re.search(r'Topic\s*:\s*(.+?)(?:\s*Abstract|$)', text, re.IGNORECASE)
+        if tp_m:
+            title_raw = tp_m.group(1).strip().rstrip(".")
+            if not is_placeholder(title_raw):
+                title = title_raw
+
+        if speaker or title:
+            debug(f"DS: {date} | {speaker} | {title[:40] if title else '(no title)'}")
+            talks.append({
+                "date": date,
+                "speaker": speaker,
+                "affiliation": affiliation,
+                "title": title,
+                "url": url,
+            })
+
+    return talks
+
+
+def parse_combinatorics(soup, url):
+    """
+    Format: dash-list items with labeled fields.
+      **Tuesday, M/D**
+      Speaker: Name (Affiliation)
+      Title: text
+      Time: 1:30-2:30
+      Location: WH 100E
+
+    DokuWiki's nested indentation makes DOM traversal unreliable,
+    so we extract the full section text and split by date patterns.
+    """
+    talks = []
+
+    # Find the current semester heading
+    today = datetime.date.today()
+    season = "Spring" if today.month <= 7 else "Fall"
+    semester_label = f"{season} {today.year}".lower()
+
+    target_section = None
+    for tag in soup.find_all(re.compile(r'^h[1-3]$')):
+        if semester_label in tag.get_text(strip=True).lower():
+            target_section = tag
+            break
+
+    if not target_section:
+        debug(f"Comb: no heading found for '{semester_label}'")
+        return talks
+
+    # Get all text between this heading and the next one
+    section_parts = []
+    for sib in target_section.find_next_siblings():
+        if sib.name and re.match(r'^h[1-3]$', sib.name):
+            break
+        section_parts.append(sib.get_text("\n"))
+    section_text = "\n".join(section_parts)
+
+    # Split by date patterns: "Tuesday, M/D" or "Thursday, M/D" etc.
+    day_pattern = r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*,\s*\d{1,2}/\d{1,2}'
+    chunks = re.split(f'({day_pattern})', section_text, flags=re.IGNORECASE)
+
+    # chunks alternates: [preamble, date1, text1, date2, text2, ...]
+    i = 1  # skip preamble
+    while i < len(chunks) - 1:
+        date_str = chunks[i].strip()
+        body = chunks[i + 1].strip()
+        i += 2
+
+        date = parse_short_date(date_str)
+        if not date:
+            continue
+
+        # Skip no-seminar / holiday / cancelled / organizational entries
+        full_text = (date_str + " " + body).lower()
+        skip_phrases = ["no seminar", "organizational meeting", "holiday",
+                        "cancelled", "no meeting", "it's \"monday\"",
+                        "it is \"friday\"", "it is \"monday\"",
+                        "closed for repairs", "takes a holiday",
+                        "working holiday", "m. seminaire takes a holiday"]
+        if any(phrase in full_text for phrase in skip_phrases):
+            debug(f"Comb: skipping non-talk entry for {date}")
+            continue
+
+        # Parse speaker and title from the body text
+        lines = [l.strip() for l in body.split("\n") if l.strip()]
+        speaker, affiliation, title, note = _extract_speaker_title(lines)
+
+        if speaker or title:
+            debug(f"Comb: {date} | {speaker} | {title[:40] if title else '(no title)'}")
+            talks.append({
+                "date": date,
+                "speaker": speaker,
+                "affiliation": affiliation,
+                "title": title,
+                "url": url,
+                **({"note": note} if note else {}),
+            })
+
+    return talks
+
 
 # Map seminar name → parser function
 PARSERS = {
     "Algebra":           parse_algebra,
     "Analysis":          parse_analysis,
     "Geometry/Topology": parse_geom_topology,
-    # Add remaining parsers here as they are written:
-    # "Colloquium":      parse_colloquium,
-    # "Arithmetic":      parse_arithmetic,
-    # "Combinatorics":   parse_combinatorics,
-    # "Data Science":    parse_datasci,
-    # "Statistics":      parse_statistics,
+    "Statistics":        parse_statistics,
+    "Data Science":      parse_datasci,
+    "Combinatorics":     parse_combinatorics,
+    # "Colloquium":      parse_colloquium,      # not active this semester
+    # "Arithmetic":      parse_arithmetic,       # format TBD
 }
 
 
