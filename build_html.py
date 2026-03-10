@@ -6,6 +6,7 @@ Writes the result to docs/index.html (served by GitHub Pages).
 """
 
 import os
+import re
 import datetime
 from scrape import get_upcoming_talks
 from config import LOOKAHEAD_DAYS
@@ -35,21 +36,40 @@ def build_table_html(talks):
         url = t["url"]
         title_link = f'<a href="{url}">{title}</a>'
 
-        row_class = ' class="special"' if t.get("note") else ""
-        note = f' <span class="note">({t["note"]})</span>' if t.get("note") else ""
+        # Determine displayed time: use special time if present, else default
+        note = t.get("note", "")
+        default_time = t.get("default_time", "")
+        if note:
+            # Extract just the time portion from notes like "3:30pm, Alumni Lounge..."
+            time_m = re.search(r'(\d{1,2}:\d{2}\s*(?:am|pm)?)', note, re.IGNORECASE)
+            if time_m:
+                display_time = f'<strong>{time_m.group(1)}</strong> *'
+            else:
+                display_time = default_time
+        else:
+            display_time = default_time
+
+        row_class = ' class="special"' if note else ""
+        location_note = ""
+        if note and "," in note:
+            # Show location for special events
+            loc = note.split(",", 1)[1].strip()
+            if loc:
+                location_note = f' <span class="note">({loc})</span>'
 
         rows.append(
             f"<tr{row_class}>"
             f"<td>{format_date(t['date'])}</td>"
-            f"<td>{t['seminar']}{note}</td>"
+            f"<td>{display_time}</td>"
+            f"<td>{t['seminar']}</td>"
             f"<td>{speaker}</td>"
-            f"<td>{title_link}</td>"
+            f"<td>{title_link}{location_note}</td>"
             f"</tr>"
         )
 
     return (
         "<table>\n"
-        "<tr><th>Date</th><th>Seminar</th><th>Speaker</th><th>Title</th></tr>\n"
+        "<tr><th>Date</th><th>Time</th><th>Seminar</th><th>Speaker</th><th>Title</th></tr>\n"
         + "\n".join(rows)
         + "\n</table>"
     )

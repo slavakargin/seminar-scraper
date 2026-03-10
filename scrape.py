@@ -698,9 +698,11 @@ def get_upcoming_talks():
                 continue
 
             talks = parser(soup, url)
+            default_time = sem.get("time", "")
             for t in talks:
                 if start <= t["date"] <= end:
                     t["seminar"] = name
+                    t["default_time"] = default_time
                     results.append(t)
         except Exception as e:
             print(f"  ERROR parsing {name}: {e}")
