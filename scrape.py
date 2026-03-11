@@ -173,47 +173,88 @@ def parse_algebra(soup, url):
 
 def parse_analysis(soup, url):
     """
-    Format: labeled fields.
-      ***Speaker***: Name (Affiliation)
-      ***Topic***: Title
-      ***Abstract***: ...
+    Format: The Analysis page uses literal '*' in <p> tags (not proper <li> elements).
+    Each talk is a <p> block containing:
+      * **Date, Wednesday** (4-5pm)
+      **//Speaker//**: Name (Affiliation)
+      **//Topic//**: Title
+    followed by a <div class="wrap_box"> with the abstract.
+
+    We find the Spring 2026 section and iterate over its <p> children.
     """
     talks = []
-    content_div = soup.find("div", class_="dokuwiki")
-    if not content_div:
+
+    # Find the Spring 2026 heading and its content div
+    today = datetime.date.today()
+    season = "Spring" if today.month <= 7 else "Fall"
+    semester_label = f"{season} {today.year}".lower()
+
+    target = None
+    for tag in soup.find_all(re.compile(r'^h[1-5]$')):
+        if semester_label in tag.get_text(strip=True).lower():
+            target = tag
+            break
+
+    if not target:
+        debug(f"Anly: no heading found for '{semester_label}'")
         return talks
 
-    for li in content_div.find_all("li"):
-        raw = li.get_text("\n")
-        lines = [l.strip() for l in raw.split("\n") if l.strip()]
+    # Get the content div that follows the heading
+    section_div = None
+    for sib in target.find_next_siblings():
+        if sib.name and re.match(r'^h[1-5]$', sib.name):
+            break
+        if sib.name == 'div':
+            section_div = sib
+            break
+
+    if not section_div:
+        debug("Anly: no content div found after heading")
+        return talks
+
+    # Each talk is in a <p> that starts with "* Date"
+    for p in section_div.find_all('p'):
+        text = p.get_text("\n")
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
         if not lines:
             continue
 
-        date = parse_month_day(lines[0])
+        # Skip leading "*" and "(4-5pm)" type lines to find the date
+        date = None
+        date_idx = 0
+        for idx, line in enumerate(lines):
+            cleaned = line.lstrip("* ").strip()
+            if cleaned in ("*", "") or re.match(r'^\(\d', cleaned):
+                continue
+            date = parse_month_day(cleaned)
+            if date:
+                date_idx = idx
+                break
+
         if not date:
             continue
 
-        speaker, affiliation, title = "", "", ""
-        for line in lines[1:]:
-            ll = line.lower()
-            if ll.startswith("speaker"):
-                val = re.sub(r'(?i)^speaker\s*:\s*', '', line).strip()
-                aff_m = re.search(r'\(([^)]+)\)', val)
-                affiliation = aff_m.group(1) if aff_m else ""
-                speaker = re.sub(r'\s*\([^)]*\)', '', val).strip()
-            elif ll.startswith("topic") or ll.startswith("title"):
-                val = re.sub(r'(?i)^(topic|title)\s*:\s*', '', line).strip()
-                if not is_placeholder(val):
-                    title = val
+        # Skip organizational / no-meeting entries
+        full_text = " ".join(lines).lower()
+        if "organizational" in full_text or "no meeting" in full_text:
+            debug(f"Anly: skipping non-talk entry for {date}")
+            continue
+
+        speaker, affiliation, title, note = _extract_speaker_title(lines[date_idx + 1:])
 
         if speaker or title:
+            debug(f"Anly: {date} | {speaker} | {title[:40] if title else '(no title)'}")
             talks.append({
                 "date": date,
                 "speaker": speaker,
                 "affiliation": affiliation,
                 "title": title,
                 "url": url,
+                **({"note": note} if note else {}),
             })
+        else:
+            debug(f"Anly: no speaker/title for {date}: {lines[1:3]}")
+
     return talks
 
 
