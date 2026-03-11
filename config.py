@@ -2,7 +2,7 @@ LOOKAHEAD_DAYS = 7
 
 SEMINARS = [
     {"name": "Algebra",           "url": "https://www2.math.binghamton.edu/p/seminars/alge",       "time": "Tue 2:45"},
-    {"name": "Analysis",          "url": "https://www2.math.binghamton.edu/p/seminars/anly",       "time": "Wed 4:00"},
+    {"name": "Analysis",          "url": "https://www2.math.binghamton.edu/p/seminars/anal",       "time": "Wed 4:00"},
     {"name": "Arithmetic",        "url": "https://www2.math.binghamton.edu/p/seminars/arit",       "time": "Tue 4:00"},
     {"name": "Combinatorics",     "url": "https://www2.math.binghamton.edu/p/seminars/comb/start", "time": "Tue 1:30"},
     {"name": "Data Science",      "url": "https://www2.math.binghamton.edu/p/seminars/datasci",    "time": "Tue 12:15"},
