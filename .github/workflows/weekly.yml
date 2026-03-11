@@ -1,9 +1,9 @@
-name: Weekly seminar update
+name: Daily seminar update
 
 on:
   schedule:
-    # Every Sunday at 8:00 AM UTC (3:00 AM EST)
-    - cron: '0 8 * * 0'
+    # Every day at 8:00 AM UTC (3:00 AM EST)
+    - cron: '0 8 * * *'
   workflow_dispatch:  # allows manual trigger from GitHub UI
 
 permissions:

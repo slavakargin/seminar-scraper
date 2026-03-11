@@ -1,7 +1,7 @@
 # seminar-scraper
 
 Scrapes the department seminar pages and posts a table of upcoming
-talks to the DokuWiki front page every Sunday via GitHub Actions.
+talks to the DokuWiki front page every night via GitHub Actions.
 
 ## How it works
 
