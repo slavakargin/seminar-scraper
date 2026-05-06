@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 git pull --rebase
 
 # Build the HTML
-/usr/bin/python3 build_html.py
+/opt/anaconda3/bin/python3 build_html.py
 
 # Commit and push only if docs/index.html changed
 if ! git diff --quiet docs/index.html; then
