@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/vkargin/seminar-scraper/run_weekly.sh</string>
+        <string>/Users/vladislavkargin/seminar-scraper/run_weekly.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/vkargin/seminar-scraper</string>
+    <string>/Users/vladislavkargin/seminar-scraper</string>
 
     <key>StartCalendarInterval</key>
     <dict>
