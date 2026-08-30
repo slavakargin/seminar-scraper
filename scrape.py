@@ -33,6 +33,16 @@ MONTH_MAP = {
 
 DEBUG = False   # set via --debug flag
 
+# Filled in by get_upcoming_talks(): [(seminar_name, reason), ...] for every
+# seminar that produced nothing on the last run.  build_html.py reads this so
+# an unreachable department site can't silently publish an empty table.
+LAST_RUN_HEALTH = []
+
+
+def unreachable_seminars():
+    """Seminars whose page could not be fetched on the last run."""
+    return [name for name, reason in LAST_RUN_HEALTH if "could not be fetched" in reason]
+
 
 def debug(msg):
     if DEBUG:
@@ -74,10 +84,18 @@ def parse_month_day(text):
 
 def parse_short_date(text):
     """
-    Parse 'Tuesday, 3/10' or 'Thursday, 9/4' or '3/10' into a datetime.date.
-    Also handles 'Tuesday, 1/20' with leading day-of-week.
-    Returns None if parsing fails.
+    Parse 'Tuesday, 3/10', 'Thursday, 9/4', '3/10', or '8/20/2026'
+    into a datetime.date.  Returns None if parsing fails.
     """
+    # With explicit year first: M/D/YYYY
+    m = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', text)
+    if m:
+        month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return datetime.date(year, month, day)
+        except ValueError:
+            return None
+
     m = re.search(r'(\d{1,2})/(\d{1,2})', text)
     if not m:
         return None
@@ -92,12 +110,64 @@ def parse_short_date(text):
         return None
 
 
+def parse_any_date(text):
+    """
+    Parse whichever date format a page happens to use:
+    'March 10', 'February 10, 2026', 'Tuesday, 3/10', '8/20/2026'.
+    Returns None if parsing fails.
+    """
+    if not text:
+        return None
+    if re.search(r'\d{1,2}/\d{1,2}', text):
+        d = parse_short_date(text)
+        if d:
+            return d
+    return parse_month_day(text)
+
+
+def current_semester_label():
+    """'fall 2026' / 'spring 2026' – the heading text to look for."""
+    today = datetime.date.today()
+    season = "Spring" if today.month <= 7 else "Fall"
+    return f"{season} {today.year}".lower()
+
+
+# Entries that occupy a date slot but are not talks.
+NON_TALK_PATTERNS = (
+    "no meeting", "no seminar", "organizational meeting", "organizing meeting",
+    "organizational", "cancelled", "canceled", "spring break", "fall break",
+    "thanksgiving", "holiday", "monday classes meet", "classes meet",
+    "closed for repairs", "takes a holiday", "working holiday",
+    "no class", "reading day",
+)
+
+
+def is_non_talk(text):
+    """Return True if this entry is a break / org meeting / cancellation."""
+    t = (text or "").lower()
+    return any(p in t for p in NON_TALK_PATTERNS)
+
+
+# Values that mean "this field has not been filled in yet".
+PLACEHOLDER_VALUES = {
+    "", "title", "topic", "speaker", "tbd", "tba", "t.b.a.", "t.b.d.",
+    "text of abstract", "abstract", "n/a", "na", "none",
+    "name of speaker", "speaker name", "university", "affiliation",
+    "???", "??", "?",
+}
+
+
 def is_placeholder(text):
     """Return True if the text is an unfilled placeholder."""
     if not text:
         return True
-    t = text.strip().lower().rstrip(":")
-    return t in {"", "title", "tbd", "text of abstract", "tba", "abstract"}
+    t = text.strip().lower().rstrip(":").strip()
+    if t in PLACEHOLDER_VALUES:
+        return True
+    # Rows still holding the template, e.g. "??? ??? (??? University)"
+    if re.fullmatch(r'[?\s\.\-–—]*', t):
+        return True
+    return False
 
 
 def upcoming_window():
@@ -144,22 +214,31 @@ def parse_algebra(soup, url):
         if not lines:
             continue
 
-        date = parse_month_day(lines[0])
+        date = parse_any_date(lines[0])
         if not date:
             continue
 
-        # Skip 'No Meeting' entries
-        if any("no meeting" in l.lower() for l in lines):
+        speaker_aff = lines[1] if len(lines) > 1 else ""
+
+        # Skip 'No Meeting' / org meeting / 'Monday classes meet' entries.
+        # On this page the notice sits in the speaker slot, so check it too.
+        if is_non_talk(" ".join(lines)) or is_non_talk(speaker_aff):
+            debug(f"Alge: skipping non-talk entry for {date}")
             continue
 
-        speaker_aff = lines[1] if len(lines) > 1 else ""
         aff_m = re.search(r'\(([^)]+)\)', speaker_aff)
         affiliation = aff_m.group(1) if aff_m else ""
         speaker = re.sub(r'\s*\([^)]*\)', '', speaker_aff).strip()
+        if is_placeholder(speaker):
+            speaker = ""
 
         title = lines[2] if len(lines) > 2 else ""
         if is_placeholder(title):
             title = ""
+
+        if not (speaker or title):
+            debug(f"Alge: no speaker/title for {date}")
+            continue
 
         talks.append({
             "date": date,
@@ -173,70 +252,40 @@ def parse_algebra(soup, url):
 
 def parse_analysis(soup, url):
     """
-    Format: The Analysis page uses literal '*' in <p> tags (not proper <li> elements).
-    Each talk is a <p> block containing:
-      * **Date, Wednesday** (4-5pm)
+    Format (DokuWiki rendered):
+      **Date, Wednesday** (4:00-5:00pm)
       **//Speaker//**: Name (Affiliation)
       **//Topic//**: Title
-    followed by a <div class="wrap_box"> with the abstract.
+      **//Abstract//**: ...
 
-    We find the Spring 2026 section and iterate over its <p> children.
+    Same split-line pattern as Geometry/Topology and Statistics.
+    (Until Fall 2026 this page used literal '*' inside <p> tags; it now
+    uses proper list items, so we go through _find_current_semester_section.)
     """
     talks = []
+    items = _find_current_semester_section(soup)
 
-    # Find the Spring 2026 heading and its content div
-    today = datetime.date.today()
-    season = "Spring" if today.month <= 7 else "Fall"
-    semester_label = f"{season} {today.year}".lower()
-
-    target = None
-    for tag in soup.find_all(re.compile(r'^h[1-5]$')):
-        if semester_label in tag.get_text(strip=True).lower():
-            target = tag
-            break
-
-    if not target:
-        debug(f"Anly: no heading found for '{semester_label}'")
-        return talks
-
-    # Get the content div that follows the heading
-    section_div = None
-    for sib in target.find_next_siblings():
-        if sib.name and re.match(r'^h[1-5]$', sib.name):
-            break
-        if sib.name == 'div':
-            section_div = sib
-            break
-
-    if not section_div:
-        debug("Anly: no content div found after heading")
-        return talks
-
-    # Each talk is in a <p> that starts with "* Date"
-    for p in section_div.find_all('p'):
-        text = p.get_text("\n")
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+    for li in items:
+        lines = [l.strip() for l in li.get_text("\n").split("\n") if l.strip()]
         if not lines:
             continue
 
-        # Skip leading "*" and "(4-5pm)" type lines to find the date
-        date = None
-        date_idx = 0
-        for idx, line in enumerate(lines):
+        # The date is on the first non-time line
+        date, date_idx = None, 0
+        for idx, line in enumerate(lines[:3]):
             cleaned = line.lstrip("* ").strip()
-            if cleaned in ("*", "") or re.match(r'^\(\d', cleaned):
+            if not cleaned or re.match(r'^\(\d', cleaned):
                 continue
-            date = parse_month_day(cleaned)
+            date = parse_any_date(cleaned)
             if date:
                 date_idx = idx
                 break
 
         if not date:
+            debug(f"Anly: no date in: {lines[0][:60]}")
             continue
 
-        # Skip organizational / no-meeting entries
-        full_text = " ".join(lines).lower()
-        if "organizational" in full_text or "no meeting" in full_text:
+        if is_non_talk(" ".join(lines)):
             debug(f"Anly: skipping non-talk entry for {date}")
             continue
 
@@ -253,7 +302,7 @@ def parse_analysis(soup, url):
                 **({"note": note} if note else {}),
             })
         else:
-            debug(f"Anly: no speaker/title for {date}: {lines[1:3]}")
+            debug(f"Anly: no speaker/title for {date}")
 
     return talks
 
@@ -268,9 +317,7 @@ def _find_current_semester_section(soup):
     collapsible blocks or further down the page.
     """
     # Look for the current semester heading
-    today = datetime.date.today()
-    season = "Spring" if today.month <= 7 else "Fall"
-    semester_label = f"{season} {today.year}".lower()
+    semester_label = current_semester_label()
 
     # Strategy 1: find an h1/h2/h3 matching the semester, then get the
     # <ul> that follows it.
@@ -300,6 +347,23 @@ def _find_current_semester_section(soup):
     return []
 
 
+# Field labels used on the seminar pages.  A line only counts as a label if
+# the word is followed by a colon, or is alone on its line — otherwise a real
+# title like "Time series and topological data analysis..." is swallowed as if
+# it were a "Time:" field.
+_ALL_LABELS = r'(?:speakers?|titles?|topics?|abstract|time|location|biography|bio|affiliation)'
+_META_LABELS = r'(?:abstract|time|location|biography|bio)'
+
+
+def _is_label_line(text, labels=_ALL_LABELS):
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if re.match(rf'^{labels}\s*:', t):
+        return True
+    return bool(re.fullmatch(rf'{labels}\s*:?', t))
+
+
 def _extract_speaker_title(lines):
     """
     Given the text lines of a talk entry (after the date line),
@@ -321,7 +385,7 @@ def _extract_speaker_title(lines):
         ll = line.lower().strip()
 
         # Skip blanks, abstract lines, and metadata labels
-        if not ll or ll.startswith("abstract") or ll.startswith("time") or ll.startswith("location"):
+        if not ll or _is_label_line(ll, _META_LABELS):
             i += 1
             continue
 
@@ -348,18 +412,15 @@ def _extract_speaker_title(lines):
             continue
 
         if ll.startswith("speaker"):
-            val = re.sub(r'(?i)^speaker\s*:?\s*', '', line).strip()
+            val = re.sub(r'(?i)^speakers?\s*:?\s*', '', line).strip()
             # If the label was alone on its line, the name is on the next line
             if not val and i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
-                next_ll = next_line.lower()
                 # Handle ": Name (Aff)" pattern (colon split from label)
                 if next_line.startswith(":"):
                     i += 1
                     val = next_line.lstrip(": ").strip()
-                elif not (next_ll.startswith("title") or next_ll.startswith("abstract")
-                        or next_ll.startswith("topic") or next_ll.startswith("time")
-                        or next_ll.startswith("location")):
+                elif not _is_label_line(next_line):
                     i += 1
                     val = next_line
             # Check if affiliation is already in parentheses within val
@@ -380,12 +441,10 @@ def _extract_speaker_title(lines):
             # Same: title text might be on the next line
             if not val and i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
-                next_ll = next_line.lower()
                 if next_line.startswith(":"):
                     i += 1
                     val = next_line.lstrip(": ").strip()
-                elif not (next_ll.startswith("speaker") or next_ll.startswith("abstract")
-                        or next_ll.startswith("time") or next_ll.startswith("location")):
+                elif not _is_label_line(next_line):
                     i += 1
                     val = next_line
             if not is_placeholder(val):
@@ -399,6 +458,14 @@ def _extract_speaker_title(lines):
         note = special_info
     elif is_special:
         note = "Special event"
+
+    # Drop values that are still page-template placeholders
+    if is_placeholder(speaker):
+        speaker = ""
+    if is_placeholder(affiliation) or "?" in affiliation:
+        affiliation = ""
+    if is_placeholder(title):
+        title = ""
 
     return speaker, affiliation, title, note
 
@@ -422,15 +489,15 @@ def parse_geom_topology(soup, url):
         if not lines:
             continue
 
-        # Try to find a date in the first line
-        date = parse_month_day(lines[0])
+        # Try to find a date in the first line (this page has used both
+        # 'August 20' and '8/20/2026' styles)
+        date = parse_any_date(lines[0])
         if not date:
             debug(f"No date in: {lines[0][:60]}")
             continue
 
-        # Skip 'no seminar' / 'spring break' entries
-        full_text = " ".join(lines).lower()
-        if "no seminar" in full_text or "spring break" in full_text:
+        # Skip 'no seminar' / break entries
+        if is_non_talk(" ".join(lines)):
             debug(f"Skipping no-seminar entry for {date}")
             continue
 
@@ -477,9 +544,13 @@ def parse_statistics(soup, url):
         if not lines:
             continue
 
-        date = parse_month_day(lines[0])
+        date = parse_any_date(lines[0])
         if not date:
             debug(f"Stat: no date in: {lines[0][:60]}")
+            continue
+
+        if is_non_talk(" ".join(lines)):
+            debug(f"Stat: skipping non-talk entry for {date}")
             continue
 
         speaker, affiliation, title, note = _extract_speaker_title(lines[1:])
@@ -518,8 +589,8 @@ def parse_datasci(soup, url):
     for li in content_div.find_all("li"):
         text = li.get_text(" ", strip=True)
 
-        # Skip cancelled entries
-        if "cancelled" in text.lower():
+        # Skip cancelled / break / organizational entries
+        if is_non_talk(text):
             continue
 
         # Find date
@@ -532,7 +603,7 @@ def parse_datasci(soup, url):
 
         # Extract speaker — between "Speaker :" and either "Topic" or end
         speaker, affiliation, title = "", "", ""
-        sp_m = re.search(r'Speaker\s*:\s*(.+?)(?:\s*Topic\s*:|$)', text, re.IGNORECASE)
+        sp_m = re.search(r'Speakers?\s*:\s*(.+?)(?:\s*Topic\s*:|$)', text, re.IGNORECASE)
         if sp_m:
             speaker_raw = sp_m.group(1).strip()
             # Strip "Dr." prefix and link artifacts
@@ -543,6 +614,10 @@ def parse_datasci(soup, url):
                 speaker = re.sub(r'\s*\([^)]*\)', '', speaker_raw).strip()
             else:
                 speaker = speaker_raw
+            if is_placeholder(speaker):
+                speaker = ""
+            if is_placeholder(affiliation) or "?" in affiliation:
+                affiliation = ""
 
         # Extract topic/title
         tp_m = re.search(r'Topic\s*:\s*(.+?)(?:\s*Abstract|$)', text, re.IGNORECASE)
@@ -579,9 +654,7 @@ def parse_combinatorics(soup, url):
     talks = []
 
     # Find the current semester heading
-    today = datetime.date.today()
-    season = "Spring" if today.month <= 7 else "Fall"
-    semester_label = f"{season} {today.year}".lower()
+    semester_label = current_semester_label()
 
     target_section = None
     for tag in soup.find_all(re.compile(r'^h[1-5]$')):
@@ -618,12 +691,9 @@ def parse_combinatorics(soup, url):
 
         # Skip no-seminar / holiday / cancelled / organizational entries
         full_text = (date_str + " " + body).lower()
-        skip_phrases = ["no seminar", "organizational meeting", "holiday",
-                        "cancelled", "no meeting", "it's \"monday\"",
-                        "it is \"friday\"", "it is \"monday\"",
-                        "closed for repairs", "takes a holiday",
-                        "working holiday", "m. seminaire takes a holiday"]
-        if any(phrase in full_text for phrase in skip_phrases):
+        extra_skips = ["it's \"monday\"", "it is \"friday\"", "it is \"monday\"",
+                       "m. seminaire takes a holiday"]
+        if is_non_talk(full_text) or any(p in full_text for p in extra_skips):
             debug(f"Comb: skipping non-talk entry for {date}")
             continue
 
@@ -664,15 +734,14 @@ def parse_arithmetic(soup, url):
         if not lines:
             continue
 
-        date = parse_month_day(lines[0])
+        date = parse_any_date(lines[0])
         if not date:
             debug(f"Arit: no date in: {lines[0][:60]}")
             continue
 
-        # Skip organizational meetings
-        full_text = " ".join(lines).lower()
-        if "organizational meeting" in full_text:
-            debug(f"Arit: skipping org meeting for {date}")
+        # Skip organizational meetings / breaks / cancellations
+        if is_non_talk(" ".join(lines)):
+            debug(f"Arit: skipping non-talk entry for {date}")
             continue
 
         speaker, affiliation, title, note = _extract_speaker_title(lines[1:])
@@ -719,9 +788,16 @@ def get_upcoming_talks():
     """
     Scrape all configured seminar pages and return talks in the lookahead window,
     sorted by date.
+
+    Also prints a health warning for any seminar whose page yielded no talks
+    at all for the whole semester — that almost always means the page's
+    markup changed and its parser needs updating, which otherwise fails
+    silently (the talks just quietly stop appearing).
     """
+    global LAST_RUN_HEALTH
     start, end = upcoming_window()
     results = []
+    health = []
 
     for sem in SEMINARS:
         name = sem["name"]
@@ -736,9 +812,23 @@ def get_upcoming_talks():
         try:
             soup = fetch_page(url)
             if soup is None:
+                health.append((name, "page could not be fetched"))
                 continue
 
             talks = parser(soup, url)
+            if not talks:
+                # Does the page even have a current-semester section?
+                has_section = any(
+                    current_semester_label() in tag.get_text(strip=True).lower()
+                    for tag in soup.find_all(re.compile(r'^h[1-5]$'))
+                )
+                if has_section:
+                    health.append((name, "0 talks parsed from the "
+                                         f"{current_semester_label().title()} section"))
+                else:
+                    health.append((name, f"no '{current_semester_label().title()}' "
+                                         "heading on the page"))
+
             default_time = sem.get("time", "")
             for t in talks:
                 if start <= t["date"] <= end:
@@ -747,7 +837,17 @@ def get_upcoming_talks():
                     results.append(t)
         except Exception as e:
             print(f"  ERROR parsing {name}: {e}")
+            health.append((name, f"parser raised {type(e).__name__}: {e}"))
             continue
+
+    LAST_RUN_HEALTH = health
+
+    if health:
+        print("\n  HEALTH CHECK — these seminars produced nothing:")
+        for name, reason in health:
+            print(f"    ! {name}: {reason}")
+        print("    (An empty semester section is normal early on; a page whose"
+              "\n     format changed looks exactly the same, so verify by eye.)")
 
     results.sort(key=lambda t: t["date"])
     return results

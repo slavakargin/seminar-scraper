@@ -8,6 +8,9 @@ Writes the result to docs/index.html (served by GitHub Pages).
 import os
 import re
 import datetime
+import sys
+
+import scrape
 from scrape import get_upcoming_talks
 from config import LOOKAHEAD_DAYS
 
@@ -88,6 +91,15 @@ def main():
     print("Scraping seminars...")
     talks = get_upcoming_talks()
     print(f"Found {len(talks)} upcoming talk(s).\n")
+
+    # If the department site was unreachable we have no idea what is on this
+    # week — publishing "No seminars scheduled" would be a lie.  Leave the
+    # previous docs/index.html in place and fail loudly instead.
+    unreachable = scrape.unreachable_seminars()
+    if unreachable and not talks:
+        print("ABORT: could not reach " + ", ".join(unreachable) +
+              " and found no talks; leaving the existing page untouched.")
+        sys.exit(1)
 
     with open(TEMPLATE, "r") as f:
         html = f.read()
