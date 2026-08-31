@@ -2,8 +2,11 @@ name: Daily seminar update
 
 on:
   schedule:
-    # 08:00 UTC = 4:00 AM EDT / 3:00 AM EST
-    - cron: '0 8 * * *'
+    # 08:17 UTC = 4:17 AM EDT / 3:17 AM EST.
+    # Deliberately off the top of the hour: GitHub queues every :00 cron in
+    # the world at once, and runs scheduled then are the ones most often
+    # delayed or dropped.
+    - cron: '17 8 * * *'
   workflow_dispatch:  # allows manual trigger from GitHub UI
 
 permissions:
@@ -33,17 +36,33 @@ jobs:
       # Exits non-zero (leaving docs/index.html untouched) if the department
       # site is unreachable, so a network blip can't blank the table.
       - name: Build HTML page
-        run: python build_html.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python build_html.py | tee build.log
 
       # GitHub Pages serves main/docs, so publishing == committing the file.
+      # Most days the table is unchanged and nothing is committed — the run
+      # summary below is then the only evidence the job fired at all.
       - name: Commit updated table
+        shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/index.html
+
+          stamp="$(date -u '+%Y-%m-%d %H:%M UTC')"
+          found="$(grep -m1 'upcoming talk' build.log || echo 'talk count unknown')"
+
           if git diff --cached --quiet; then
             echo "No changes."
+            echo "**$stamp** — $found Table already up to date, nothing committed." \
+              >> "$GITHUB_STEP_SUMMARY"
           else
             git commit -m "Update seminar table $(date +%Y-%m-%d)"
             git push
+            echo "**$stamp** — $found Table updated and pushed." \
+              >> "$GITHUB_STEP_SUMMARY"
           fi
+
+          grep -A4 'HEALTH CHECK' build.log >> "$GITHUB_STEP_SUMMARY" || true
