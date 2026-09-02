@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Seminars — hallway display</title>
+<style>
+  /* ---------------------------------------------------------------
+     1920 x 1080 hallway display.  Read from ~4 metres away, so the
+     smallest thing on screen (the affiliation) is still 26px.
+     --------------------------------------------------------------- */
+  :root {
+    --bg:        #0d1512;   /* near-black with a green cast */
+    --panel:     #14211c;
+    --green:     #00a878;   /* accent, lifted from BU green for contrast */
+    --green-dim: #0b5f47;
+    --text:      #f2f5f4;
+    --muted:     #8fa39c;
+    --rule:      #24352e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    padding: 54px 72px 40px;
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 4px solid var(--green);
+    padding-bottom: 22px;
+    margin-bottom: 8px;
+    flex: 0 0 auto;
+  }
+  h1 {
+    font-size: 58px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+  h1 .dept { color: var(--green); }
+  .range {
+    font-size: 30px;
+    color: var(--muted);
+    font-weight: 400;
+    white-space: nowrap;
+    padding-left: 40px;
+  }
+
+  /* The talk list shrinks as a whole if a fortnight is unusually full. */
+  #list { flex: 1 1 auto; overflow: hidden; }
+
+  .talk {
+    display: grid;
+    grid-template-columns: 230px 300px 1fr;
+    gap: 0 32px;
+    align-items: start;
+    padding: 13px 0 13px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .talk:last-child { border-bottom: none; }
+
+  .when .day {
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .when .date {
+    font-size: 24px;
+    color: var(--muted);
+    line-height: 1.25;
+  }
+  .when .time {
+    font-size: 24px;
+    color: var(--green);
+    line-height: 1.25;
+  }
+
+  .field {
+    display: inline-block;
+    font-size: 23px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    white-space: nowrap;
+    text-transform: uppercase;
+    color: #d8f5ec;
+    background: var(--green-dim);
+    border-radius: 6px;
+    padding: 8px 14px;
+    line-height: 1.15;
+  }
+  .room { font-size: 23px; color: var(--muted); margin-top: 10px; }
+
+  .who .speaker {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .who .aff {
+    font-size: 22px;
+    color: var(--muted);
+    line-height: 1.3;
+    margin-top: 2px;
+  }
+  .who .title {
+    font-size: 26px;
+    line-height: 1.25;
+    margin-top: 8px;
+  }
+  .who .tba { color: var(--muted); font-style: italic; }
+
+  .empty {
+    font-size: 44px;
+    color: var(--muted);
+    font-style: italic;
+    padding-top: 90px;
+  }
+
+  footer {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-top: 1px solid var(--rule);
+    padding-top: 20px;
+    margin-top: 8px;
+    font-size: 25px;
+    color: var(--muted);
+  }
+  footer .site { color: var(--green); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dept">Mathematics &amp; Statistics</span> &nbsp;Seminars</h1>
+  <div class="range"><!-- RANGE --></div>
+</header>
+
+<div id="list">
+<!-- TALKS -->
+</div>
+
+<footer>
+  <div>Full listings and abstracts: <span class="site">www2.math.binghamton.edu/p/seminars</span></div>
+  <div><!-- MORE --><!-- UPDATED --></div>
+</footer>
+
+<script>
+/* Shrink the talk list until it fits the 1080px frame.  A quiet fortnight
+   renders at full size; a crowded one steps down rather than overflowing. */
+(function () {
+  var list = document.getElementById('list');
+  var scale = 1.0;
+  var guard = 0;
+  while (list.scrollHeight > list.clientHeight && scale > 0.55 && guard++ < 40) {
+    scale -= 0.03;
+    list.style.zoom = scale;
+  }
+  document.documentElement.setAttribute('data-fitted', scale.toFixed(2));
+})();
+</script>
+</body>
+</html>

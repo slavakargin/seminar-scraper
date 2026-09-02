@@ -170,10 +170,10 @@ def is_placeholder(text):
     return False
 
 
-def upcoming_window():
+def upcoming_window(days=None):
     """Return (start, end) dates for the lookahead window."""
     today = datetime.date.today()
-    return today, today + datetime.timedelta(days=LOOKAHEAD_DAYS)
+    return today, today + datetime.timedelta(days=LOOKAHEAD_DAYS if days is None else days)
 
 
 # ---------------------------------------------------------------------------
@@ -784,10 +784,11 @@ PARSERS = {
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def get_upcoming_talks():
+def get_upcoming_talks(days=None):
     """
     Scrape all configured seminar pages and return talks in the lookahead window,
-    sorted by date.
+    sorted by date.  `days` overrides LOOKAHEAD_DAYS — the web table uses the
+    default 7, the hallway-TV image asks for a longer horizon.
 
     Also prints a health warning for any seminar whose page yielded no talks
     at all for the whole semester — that almost always means the page's
@@ -795,7 +796,7 @@ def get_upcoming_talks():
     silently (the talks just quietly stop appearing).
     """
     global LAST_RUN_HEALTH
-    start, end = upcoming_window()
+    start, end = upcoming_window(days)
     results = []
     health = []
 
@@ -830,10 +831,12 @@ def get_upcoming_talks():
                                          "heading on the page"))
 
             default_time = sem.get("time", "")
+            room = sem.get("room", "")
             for t in talks:
                 if start <= t["date"] <= end:
                     t["seminar"] = name
                     t["default_time"] = default_time
+                    t["room"] = room
                     results.append(t)
         except Exception as e:
             print(f"  ERROR parsing {name}: {e}")

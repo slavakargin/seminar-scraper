@@ -33,6 +33,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Needed only to screenshot the hallway-TV image.
+      - name: Install Chromium for Playwright
+        run: playwright install --with-deps chromium
+
       # Exits non-zero (leaving docs/index.html untouched) if the department
       # site is unreachable, so a network blip can't blank the table.
       - name: Build HTML page
@@ -40,6 +44,14 @@ jobs:
         run: |
           set -o pipefail
           python build_html.py | tee build.log
+
+      # 1920x1080 PNG for the hallway TV, published alongside the page at
+      # https://slavakargin.github.io/seminar-scraper/seminars.png
+      - name: Build hallway-TV image
+        shell: bash
+        run: |
+          set -o pipefail
+          python build_png.py | tee -a build.log
 
       # GitHub Pages serves main/docs, so publishing == committing the file.
       # Most days the table is unchanged and nothing is committed — the run
@@ -49,19 +61,19 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html
+          git add docs/index.html docs/seminars.png
 
           stamp="$(date -u '+%Y-%m-%d %H:%M UTC')"
           found="$(grep -m1 'upcoming talk' build.log || echo 'talk count unknown')"
 
           if git diff --cached --quiet; then
             echo "No changes."
-            echo "**$stamp** — $found Table already up to date, nothing committed." \
+            echo "**$stamp** — $found Table and image already up to date, nothing committed." \
               >> "$GITHUB_STEP_SUMMARY"
           else
-            git commit -m "Update seminar table $(date +%Y-%m-%d)"
+            git commit -m "Update seminar table and TV image $(date +%Y-%m-%d)"
             git push
-            echo "**$stamp** — $found Table updated and pushed." \
+            echo "**$stamp** — $found Table and image updated and pushed." \
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
