@@ -30,6 +30,9 @@ MONTH_MAP = {
     "may": 5, "june": 6, "july": 7, "august": 8,
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
+# "Aug. 28th", "Sep. 4th" — the grad seminar page abbreviates.
+MONTH_MAP.update({name[:3]: num for name, num in list(MONTH_MAP.items())})
+MONTH_MAP["sept"] = 9
 
 DEBUG = False   # set via --debug flag
 
@@ -56,6 +59,8 @@ def parse_month_day(text):
     Returns None if parsing fails.
     """
     text = text.strip().lower()
+    # "Aug. 28" -> "aug 28"; a period never separates anything we need.
+    text = text.replace(".", " ")
     # Strip ordinal suffixes (including common typos like '29h')
     text = re.sub(r'(\d+)(st|nd|rd|th|h)\b', r'\1', text)
     # Try to match 'month day'
@@ -139,6 +144,7 @@ NON_TALK_PATTERNS = (
     "thanksgiving", "holiday", "monday classes meet", "classes meet",
     "closed for repairs", "takes a holiday", "working holiday",
     "no class", "reading day",
+    "welcome party", "welcome back", "pizza party", "social",
 )
 
 
@@ -767,6 +773,71 @@ def parse_arithmetic(soup, url):
     return talks
 
 
+
+def parse_gradsem(soup, url):
+    """
+    Graduate Student Seminar — hosted on Google Sites, not the department wiki.
+
+    Google Sites splits text across arbitrary <span> elements, so a normal
+    get_text("\n") can cut a word (or a date: "Nov. 27th" arriving as "Nov. 2"
+    and "7th").  We therefore join with NO separator, which keeps words whole,
+    and put the separators back by splitting on the field labels instead.
+
+    Each talk is one <li>:
+        Aug. 28th Speaker: Sylvia MedlinTitle: Ideal Triangulations...
+    """
+    talks = []
+    seen = set()
+
+    for li in soup.find_all("li"):
+        raw = li.get_text("").replace("\xa0", " ").strip()
+        if not raw or "speaker" not in raw.lower():
+            continue
+
+        # Everything before the first label is the date.
+        head = re.split(r'(?i)speakers?\s*:', raw, maxsplit=1)[0]
+        date = parse_any_date(head)
+        if not date or date in seen:
+            continue
+        seen.add(date)
+
+        if is_non_talk(raw) or is_non_talk(head):
+            debug(f"GSS: skipping non-talk entry for {date}")
+            continue
+
+        sp_m = re.search(r'(?i)speakers?\s*:\s*(.*?)\s*(?=title\s*:|abstract\s*:|$)', raw)
+        ti_m = re.search(r'(?i)title\s*:\s*(.*?)\s*(?=abstract\s*:|$)', raw)
+
+        speaker = sp_m.group(1).strip() if sp_m else ""
+        title   = ti_m.group(1).strip() if ti_m else ""
+
+        affiliation = ""
+        aff_m = re.search(r'\(([^)]+)\)', speaker)
+        if aff_m:
+            affiliation = aff_m.group(1)
+            speaker = re.sub(r'\s*\([^)]*\)', '', speaker).strip()
+
+        if is_placeholder(speaker):
+            speaker = ""
+        if is_placeholder(title):
+            title = ""
+
+        if not (speaker or title):
+            debug(f"GSS: nothing scheduled yet for {date}")
+            continue
+
+        debug(f"GSS: {date} | {speaker} | {title[:40] if title else '(no title)'}")
+        talks.append({
+            "date": date,
+            "speaker": speaker,
+            "affiliation": affiliation,
+            "title": title,
+            "url": url,
+        })
+
+    return talks
+
+
 # Map seminar name → parser function
 PARSERS = {
     "Algebra":           parse_algebra,
@@ -775,6 +846,7 @@ PARSERS = {
     "Combinatorics":     parse_combinatorics,
     "Data Science":      parse_datasci,
     "Geometry/Topology": parse_geom_topology,
+    "Graduate Student":  parse_gradsem,
     "Statistics":        parse_statistics,
     # "Colloquium":      parse_colloquium,      # not active this semester
 }

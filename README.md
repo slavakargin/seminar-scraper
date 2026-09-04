@@ -33,10 +33,33 @@ Nothing runs on a personal machine — see "History" below.
 | Data Science | Tue 12:15 | Italic-labeled fields, full dates |
 | Geometry/Topology | Thu 2:45 | Inline labels, M/D/YYYY dates, special events |
 | Statistics | Thu 1:30 | Bold-italic labeled fields |
+| Graduate Student | Fri 5:15 | Google Sites, not the wiki — see below |
 
 Each seminar page uses a different DokuWiki markup format, so each has
 its own parser in `scrape.py`.  Organizers also edit these pages by hand,
 so a format can change without warning — see "Health check" below.
+
+## The Graduate Student Seminar is a special case
+
+Every other seminar lives on the department DokuWiki. The GSS lives on Google
+Sites, which brings two problems the wiki parsers never have.
+
+**Text is split across arbitrary `<span>` elements.** A normal
+`get_text("\n")` cuts words in half — "Nov. 27th" arrives as "Nov. 2" and
+"7th", which parses as a real but wrong date. `parse_gradsem` therefore joins
+with *no* separator (keeping words whole) and recovers the field boundaries by
+splitting on the `Speaker:` / `Title:` labels instead. For the same reason
+those label patterns must not require a word boundary: the page renders
+"Eric YinTitle:" with no space between them.
+
+**The URL changes every semester** (`/fall-2026`, `/spring-2027`), and past
+semesters get moved under "Earlier Semesters" — `/fall-2025` is already a 404.
+`gradsem_url()` in `config.py` derives the slug from today's date so nobody has
+to remember this twice a year. If the organizer ever breaks the convention the
+health check reports zero talks rather than failing silently.
+
+Neither the page nor its structure is under departmental control, so this
+parser is the most likely one to break. The health check is the safety net.
 
 ## Health check
 

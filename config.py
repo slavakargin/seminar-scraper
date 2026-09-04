@@ -1,3 +1,19 @@
+import datetime
+
+
+def gradsem_url():
+    """
+    The Graduate Student Seminar lives on Google Sites, one page per semester
+    ("/fall-2026", "/spring-2027").  Derive the slug from today's date so the
+    URL does not have to be edited twice a year; if the organizer ever breaks
+    the convention the health check will report zero talks.
+    """
+    today = datetime.date.today()
+    season = "spring" if today.month <= 7 else "fall"
+    return ("https://sites.google.com/binghamton.edu/bumathgradseminar/"
+            f"{season}-{today.year}")
+
+
 # How far ahead the web table looks (the version embedded on the wiki).
 LOOKAHEAD_DAYS = 7
 
@@ -16,6 +32,8 @@ SEMINARS = [
     {"name": "Data Science",      "url": "https://www2.math.binghamton.edu/p/seminars/datasci",    "time": "Tue 12:15", "room": ""},
     {"name": "Geometry/Topology", "url": "https://www2.math.binghamton.edu/p/seminars/topsem",     "time": "Thu 2:45",  "room": ""},
     {"name": "Statistics",        "url": "https://www2.math.binghamton.edu/p/seminars/stat",       "time": "Thu 1:30",  "room": "WH-100E"},
+    # Not on the department wiki — see gradsem_url() above.
+    {"name": "Graduate Student",  "url": gradsem_url(),                                            "time": "Fri 5:15",  "room": "WH-100E"},
     # Not active this semester:
     # {"name": "Colloquium",      "url": "https://www2.math.binghamton.edu/p/seminars/colloq",     "time": "Thu 4:00",  "room": ""},
 ]
