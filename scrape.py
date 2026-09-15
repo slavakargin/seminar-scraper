@@ -429,6 +429,11 @@ def _extract_speaker_title(lines):
                 elif not _is_label_line(next_line):
                     i += 1
                     val = next_line
+                # The colon can be alone on its own line, with the name only
+                # on the line after it ("Speaker" / ":" / "Jane Doe").
+                if not val and i + 1 < len(lines) and not _is_label_line(lines[i + 1]):
+                    i += 1
+                    val = lines[i].strip()
             # Check if affiliation is already in parentheses within val
             aff_m = re.search(r'\(([^)]+)\)', val)
             if aff_m:
@@ -453,6 +458,10 @@ def _extract_speaker_title(lines):
                 elif not _is_label_line(next_line):
                     i += 1
                     val = next_line
+                # Same split-colon shape as above.
+                if not val and i + 1 < len(lines) and not _is_label_line(lines[i + 1]):
+                    i += 1
+                    val = lines[i].strip()
             if not is_placeholder(val):
                 title = val
 
@@ -612,8 +621,9 @@ def parse_datasci(soup, url):
         sp_m = re.search(r'Speakers?\s*:\s*(.+?)(?:\s*Topic\s*:|$)', text, re.IGNORECASE)
         if sp_m:
             speaker_raw = sp_m.group(1).strip()
-            # Strip "Dr." prefix and link artifacts
-            speaker_raw = re.sub(r'^Dr\.\s*', '', speaker_raw).strip()
+            # Strip honorifics so this page matches the others, which list
+            # bare names ("Professor Song Wu" -> "Song Wu").
+            speaker_raw = re.sub(r'(?i)^(dr|prof|professor)\.?\s+', '', speaker_raw).strip()
             aff_m = re.search(r'\(([^)]+)\)', speaker_raw)
             if aff_m:
                 affiliation = aff_m.group(1)
