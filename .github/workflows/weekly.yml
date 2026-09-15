@@ -2,11 +2,21 @@ name: Daily seminar update
 
 on:
   schedule:
-    # 08:17 UTC = 4:17 AM EDT / 3:17 AM EST.
+    # 05:17 UTC = 1:17 AM EDT / 12:17 AM EST.
+    #
+    # In practice GitHub starts these four to six hours late (commits have
+    # been landing 12:00-15:00 UTC on an 08:17 schedule), so this aims to put
+    # the rebuilt page up around 5-7 AM Binghamton time — before anyone looks
+    # at the wiki or the hallway screen.
+    #
+    # Not earlier than 05:00 UTC: below that the runner's UTC date is still
+    # the previous day in Binghamton, and the window and the "Updated ..."
+    # line are both computed from the runner's clock.
+    #
     # Deliberately off the top of the hour: GitHub queues every :00 cron in
     # the world at once, and runs scheduled then are the ones most often
     # delayed or dropped.
-    - cron: '17 8 * * *'
+    - cron: '17 5 * * *'
   workflow_dispatch:  # allows manual trigger from GitHub UI
 
 permissions:
@@ -23,6 +33,14 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+
+      # "Re-run jobs" replays the commit the original run used, which by then
+      # is behind main and makes the final push fail with "fetch first".
+      # Always build from the current tip instead.
+      - name: Sync to the tip of main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -61,6 +79,35 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          message="Update seminar table and TV image $(date +%Y-%m-%d)"
+
+          # If main moved while we were building, take the new tip and put our
+          # freshly generated files back on top.  These are build outputs, so
+          # the newest render always wins — no merge, nothing to conflict.
+          push_with_retry() {
+            local attempt keep
+            for attempt in 1 2 3; do
+              if git push; then
+                return 0
+              fi
+              echo "Push rejected; syncing to origin/main and re-applying the outputs (attempt $attempt)."
+              keep="$(mktemp -d)"
+              cp docs/index.html docs/seminars.png "$keep/"
+              git fetch origin main
+              git reset --hard origin/main
+              cp "$keep/index.html" "$keep/seminars.png" docs/
+              git add docs/index.html docs/seminars.png
+              if git diff --cached --quiet; then
+                echo "Someone else published the same content; nothing left to do."
+                return 0
+              fi
+              git commit -m "$message"
+            done
+            echo "Push still rejected after 3 attempts."
+            return 1
+          }
+
           git add docs/index.html docs/seminars.png
 
           stamp="$(date -u '+%Y-%m-%d %H:%M UTC')"
@@ -71,8 +118,8 @@ jobs:
             echo "**$stamp** — $found Table and image already up to date, nothing committed." \
               >> "$GITHUB_STEP_SUMMARY"
           else
-            git commit -m "Update seminar table and TV image $(date +%Y-%m-%d)"
-            git push
+            git commit -m "$message"
+            push_with_retry
             echo "**$stamp** — $found Table and image updated and pushed." \
               >> "$GITHUB_STEP_SUMMARY"
           fi
