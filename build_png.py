@@ -69,6 +69,8 @@ def build_talks_html(talks):
         title = (f'<div class="title">{esc(t["title"])}</div>' if t.get("title")
                  else '<div class="title tba">Title to be announced</div>')
         room = f'<div class="room">{esc(t["room"])}</div>' if t.get("room") else ""
+        if t.get("joint_with"):
+            room += f'<div class="room">with {esc(", ".join(t["joint_with"]))}</div>'
         time_str = esc(format_time(t))
 
         rows.append(

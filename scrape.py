@@ -691,7 +691,14 @@ def parse_combinatorics(soup, url):
     section_text = "\n".join(section_parts)
 
     # Split by date patterns: "Tuesday, M/D" or "Thursday, M/D" etc.
-    day_pattern = r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*,\s*\d{1,2}/\d{1,2}'
+    # Entries usually read "Tuesday, 9/29", but a cross-listed talk was once
+    # written "Thursday, October 1" — and an entry the splitter does not
+    # recognise is silently glued onto the previous talk, whose speaker and
+    # title it then overwrites.  Accept both spellings.
+    month = (r'(?:January|February|March|April|May|June|July|August|September|'
+             r'October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?')
+    day_pattern = (r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*,\s*'
+                   rf'(?:\d{{1,2}}/\d{{1,2}}(?:/\d{{4}})?|{month}\s+\d{{1,2}})')
     chunks = re.split(f'({day_pattern})', section_text, flags=re.IGNORECASE)
 
     # chunks alternates: [preamble, date1, text1, date2, text2, ...]
@@ -701,7 +708,7 @@ def parse_combinatorics(soup, url):
         body = chunks[i + 1].strip()
         i += 2
 
-        date = parse_short_date(date_str)
+        date = parse_any_date(date_str)
         if not date:
             continue
 
@@ -866,6 +873,53 @@ PARSERS = {
 # Main entry point
 # ---------------------------------------------------------------------------
 
+_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def _usual_weekday(default_time):
+    """'Thu 1:30' -> 3 (Thursday); None if the string carries no weekday."""
+    head = (default_time or "").split(" ", 1)[0].lower()[:3]
+    return _WEEKDAYS.get(head)
+
+
+def merge_cross_listed(talks):
+    """
+    A joint seminar is announced on both pages, so the same talk arrives
+    twice.  Keep one row.  The host is the seminar whose usual weekday matches
+    the talk's date (a Thursday talk listed by a Tuesday seminar and a
+    Thursday seminar belongs to the latter); the other names are kept in
+    'joint_with' so the page can still say it is a joint session.
+    """
+    groups, order = {}, []
+    for t in talks:
+        who = re.sub(r'\s+', ' ', (t.get("speaker") or t.get("title") or "")).strip().lower()
+        key = (t["date"], who)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(t)
+
+    merged = []
+    for key in order:
+        group = groups[key]
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        weekday = key[0].weekday()
+        hosts = [t for t in group if _usual_weekday(t.get("default_time")) == weekday]
+        host = hosts[0] if hosts else group[0]
+        host["joint_with"] = [t["seminar"] for t in group if t is not host]
+        # Whichever copy has the fuller information wins for each field.
+        for t in group:
+            for field in ("title", "affiliation", "note"):
+                if not host.get(field) and t.get(field):
+                    host[field] = t[field]
+        debug(f"Merged cross-listed talk on {key[0]}: host {host['seminar']}, "
+              f"also {host['joint_with']}")
+        merged.append(host)
+    return merged
+
+
 def get_upcoming_talks(days=None):
     """
     Scrape all configured seminar pages and return talks in the lookahead window,
@@ -934,6 +988,7 @@ def get_upcoming_talks(days=None):
         print("    (An empty semester section is normal early on; a page whose"
               "\n     format changed looks exactly the same, so verify by eye.)")
 
+    results = merge_cross_listed(results)
     results.sort(key=lambda t: t["date"])
     return results
 

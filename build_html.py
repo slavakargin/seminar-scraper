@@ -39,9 +39,14 @@ def build_table_html(talks):
         url = t["url"]
         title_link = f'<a href="{url}">{title}</a>'
 
-        # Determine displayed time: use special time if present, else default
+        # Determine displayed time: use special time if present, else default.
+        # The date column already names the weekday, and a cross-listed or
+        # rescheduled talk can fall on a different day than the seminar's
+        # usual one, so show only the clock time here.
         note = t.get("note", "")
         default_time = t.get("default_time", "")
+        if " " in default_time:
+            default_time = default_time.split(" ", 1)[1]
         if note:
             # Extract just the time portion from notes like "3:30pm, Alumni Lounge..."
             time_m = re.search(r'(\d{1,2}:\d{2}\s*(?:am|pm)?)', note, re.IGNORECASE)
@@ -51,6 +56,10 @@ def build_table_html(talks):
                 display_time = default_time
         else:
             display_time = default_time
+
+        seminar_cell = t["seminar"]
+        if t.get("joint_with"):
+            seminar_cell += f' <span class="note">/ {", ".join(t["joint_with"])}</span>'
 
         row_class = ' class="special"' if note else ""
         location_note = ""
@@ -64,7 +73,7 @@ def build_table_html(talks):
             f"<tr{row_class}>"
             f"<td>{format_date(t['date'])}</td>"
             f"<td>{display_time}</td>"
-            f"<td>{t['seminar']}</td>"
+            f"<td>{seminar_cell}</td>"
             f"<td>{speaker}</td>"
             f"<td>{title_link}{location_note}</td>"
             f"</tr>"
