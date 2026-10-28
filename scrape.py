@@ -171,7 +171,7 @@ def is_placeholder(text):
     if t in PLACEHOLDER_VALUES:
         return True
     # Rows still holding the template, e.g. "??? ??? (??? University)"
-    if re.fullmatch(r'[?\s\.\-–—]*', t):
+    if re.fullmatch(r'[?\s\.\-–—*/_]*', t):
         return True
     return False
 
@@ -224,6 +224,7 @@ def parse_algebra(soup, url):
         if not date:
             continue
 
+        lines = [l for l in (_strip_markup(x) for x in lines) if l]
         speaker_aff = lines[1] if len(lines) > 1 else ""
 
         # Skip 'No Meeting' / org meeting / 'Monday classes meet' entries.
@@ -361,6 +362,17 @@ _ALL_LABELS = r'(?:speakers?|titles?|topics?|abstract|time|location|biography|bi
 _META_LABELS = r'(?:abstract|time|location|biography|bio)'
 
 
+# DokuWiki bold/italic/underline is **..**, //..//, __..__.  When an organizer
+# leaves a pair unbalanced the renderer gives up and the raw characters leak
+# into the page text: "**// Speaker //", "Speaker: **", "(Penn State)**".
+_MARKUP_EDGE = re.compile(r'^[\s*/_]+|[\s*/_]+$')
+
+
+def _strip_markup(text):
+    """Trim leaked DokuWiki markup from both ends of a line."""
+    return _MARKUP_EDGE.sub('', text or '')
+
+
 def _is_label_line(text, labels=_ALL_LABELS):
     t = (text or "").strip().lower()
     if not t:
@@ -384,6 +396,8 @@ def _extract_speaker_title(lines):
     speaker, affiliation, title = "", "", ""
     is_special = False
     special_info = ""
+
+    lines = [l for l in (_strip_markup(x) for x in lines) if l]
 
     i = 0
     while i < len(lines):
@@ -603,6 +617,7 @@ def parse_datasci(soup, url):
 
     for li in content_div.find_all("li"):
         text = li.get_text(" ", strip=True)
+        text = re.sub(r'(?<!\S)[*/_]{2,}(?!\S)', ' ', text)   # stray ** // __
 
         # Skip cancelled / break / organizational entries
         if is_non_talk(text):
